@@ -778,9 +778,9 @@
         <div class="debug-section-body" id="timing-body"></div>
       </div>
 
-      <div class="debug-section" id="sec-physics">
-        <div class="debug-section-header" data-toggle="sec-physics">⚙️ PHYSICS <span class="chev"></span></div>
-        <div class="debug-section-body" id="physics-body"></div>
+      <div class="debug-section" id="sec-global">
+        <div class="debug-section-header" data-toggle="sec-global">⚙️ GLOBAL <span class="chev"></span></div>
+        <div class="debug-section-body" id="global-body"></div>
       </div>
 
       <div class="debug-section collapsed" id="sec-rods">
@@ -804,6 +804,10 @@
           <div class="debug-control-row">
             <label for="dbg-invincible">Invincible (no life loss)</label>
             <input type="checkbox" id="dbg-invincible">
+          </div>
+          <div class="debug-control-row">
+            <label for="dbg-free-crank">Free Crank (passive reel-out won't move crank)</label>
+            <input type="checkbox" id="dbg-free-crank">
           </div>
           <div class="help-text">Invincible: player life never drops. Force Catch (in selector above): always spawns that specific catch regardless of bait.</div>
         </div>
@@ -840,7 +844,7 @@
   <div class="modal-content">
     <h3>Import Configuration JSON</h3>
     <div class="help-text" style="margin:0 0 6px;">Paste a previously exported CONFIG JSON below and click Apply.</div>
-    <textarea id="import-text" placeholder='{"timing":{...},"physics":{...},...}'></textarea>
+    <textarea id="import-text" placeholder='{"timing":{...},"global":{...},...}'></textarea>
     <div id="import-error" style="color:var(--accent-hot);font-size:11px;min-height:18px;"></div>
     <div style="display:flex; gap:10px;">
       <button class="btn-small" id="btn-import-apply">Apply Config</button>
@@ -864,14 +868,14 @@ const DEFAULTS = {
     biteTimeMax: 1,    // seconds (use 120 in production)
     biteReactionWindow: 3,  // sec to click REEL after bite before auto-miss
   },
-  physics: {
+  global: {
     fishDps: 30,       // pts fish life drained per second while in zone
     playerDps: 30,     // pts player life drained per second while out of zone
   },
   rods: [
     { id:'R001', name:'Beggar Rod',    rarity:'Common',    hp:  80, speedMult:100, reelOut:20, reelIn:20, responsiveness:350 },
-    { id:'R002', name:'Wood Rod',      rarity:'Uncommon',  hp: 120, speedMult: 80, reelOut:25, reelIn:25, responsiveness:250 },
-    { id:'R003', name:'Technical Rod', rarity:'Rare',      hp: 200, speedMult: 70, reelOut:30, reelIn:20, responsiveness:200 },
+    { id:'R002', name:'Wood Rod',      rarity:'Uncommon',  hp: 120, speedMult: 80, reelOut:25, reelIn:20, responsiveness:250 },
+    { id:'R003', name:'Technical Rod', rarity:'Rare',      hp: 200, speedMult: 70, reelOut:30, reelIn:20, responsiveness:180 },
     { id:'R004', name:'Sniper Rod',    rarity:'Epic',      hp: 400, speedMult: 60, reelOut:35, reelIn:15, responsiveness:180 },
     { id:'R005', name:'Legendary Rod', rarity:'Legendary', hp: 800, speedMult: 50, reelOut:40, reelIn:18, responsiveness:140 },
     { id:'R006', name:'Spectral Rod',  rarity:'Unique',    hp:1600, speedMult: 40, reelOut:45, reelIn:15, responsiveness:100 },
@@ -927,6 +931,7 @@ const state = {
   debugInvincible: false,
   debugCatchImmortal: false,
   debugRodImmortal: false,
+  debugFreeCrank: false,
   isDraggingCrank: false,
   dragLastAngle: 0,
   dragAccumAngle: 0,
@@ -1274,6 +1279,7 @@ function handleReelPress() {
   if (kbd) { kbd.classList.add('pressed'); setTimeout(() => kbd.classList.remove('pressed'), 120); }
 
   const rod = getRod();
+  if (state.barHeight >= 1) return; // already at top, nothing to reel in
   state.reelInFrom         = state.barHeight;
   state.reelInTarget       = Math.min(1, state.barHeight + rod.reelIn / 100);
   state.pressTimes.push(now);
@@ -1372,7 +1378,7 @@ window.addEventListener('mousemove', e => {
     state.dragAccumAngle += delta;
     const rod = getRod();
     const crankDegs = (rod.reelIn / 10) * CRANK_DEG_PER_10PCT;
-    if (state.dragAccumAngle >= crankDegs && state.crankPhase !== 'animating') {
+    if (state.dragAccumAngle >= crankDegs && state.crankPhase !== 'animating' && state.barHeight < 1) {
       state.dragAccumAngle -= crankDegs;
       const now = performance.now();
       state.reelInFrom        = state.barHeight;
@@ -1429,7 +1435,8 @@ function stepReeling(dt, now) {
   if (state.reelOutBoost) {
     // S held: 2× backwards, cancel any forward animation
     if (state.crankPhase === 'animating') state.crankPhase = 'stopped';
-    state.crankAngle = ((state.crankAngle - passiveBackRate * 2 * dt) % 360 + 360) % 360;
+    if (state.barHeight > 0)
+      state.crankAngle = ((state.crankAngle - passiveBackRate * 2 * dt) % 360 + 360) % 360;
   } else if (state.crankPhase === 'animating') {
     // Forward crank animation takes priority over passive drift
     const t = Math.min(1, (now - state.crankAnimStart) / animMs);
@@ -1449,7 +1456,8 @@ function stepReeling(dt, now) {
     }
   } else {
     // Passive reel-out: crank drifts backwards continuously
-    state.crankAngle = ((state.crankAngle - passiveBackRate * dt) % 360 + 360) % 360;
+    if (state.barHeight > 0 && !state.debugFreeCrank)
+      state.crankAngle = ((state.crankAngle - passiveBackRate * dt) % 360 + 360) % 360;
   }
 
   // --- Indicator falls (line reeling out); S hold = 2× rate ---
@@ -1474,9 +1482,9 @@ function stepReeling(dt, now) {
 
   // --- Life mechanics ---
   if (inZone && !state.debugCatchImmortal) {
-    state.fishLife = Math.max(0, state.fishLife - CONFIG.physics.fishDps * dt);
+    state.fishLife = Math.max(0, state.fishLife - CONFIG.global.fishDps * dt);
   } else if (!inZone && !state.debugInvincible && !state.debugRodImmortal) {
-    state.playerLife = Math.max(0, state.playerLife - CONFIG.physics.playerDps * dt);
+    state.playerLife = Math.max(0, state.playerLife - CONFIG.global.playerDps * dt);
   }
 
   if (!state.debugCatchImmortal && state.fishLife <= 0) { reelSucceed(); return; }
@@ -1587,6 +1595,7 @@ function saveConfig() {
 function migrateConfig(cfg) {
   delete cfg.catchesDefaults;
   delete cfg.rarityDifficulty;
+  if (cfg.physics !== undefined && cfg.global === undefined) { cfg.global = cfg.physics; delete cfg.physics; }
   // Rod property renames
   if (cfg.rods) {
     cfg.rods.forEach(r => {
@@ -1608,9 +1617,9 @@ function migrateConfig(cfg) {
     });
   }
   // Scale life values from fractional (≤5) to integer points (×100)
-  if (cfg.physics && cfg.physics.fishDps < 5) {
-    cfg.physics.fishDps   = Math.round(cfg.physics.fishDps   * 100);
-    cfg.physics.playerDps = Math.round(cfg.physics.playerDps * 100);
+  if (cfg.global && cfg.global.fishDps < 5) {
+    cfg.global.fishDps   = Math.round(cfg.global.fishDps   * 100);
+    cfg.global.playerDps = Math.round(cfg.global.playerDps * 100);
   }
   if (cfg.rods) {
     cfg.rods.forEach(r => { if (r.life < 5) r.life = Math.round(r.life * 100); });
@@ -1717,11 +1726,11 @@ function buildDebugUI() {
   timing.appendChild(help1);
 
   // Physics
-  const phys = $('physics-body'); phys.innerHTML = '';
-  makeSlider(phys, 'Fish DPS (in zone)',    CONFIG.physics, 'fishDps',   { min: 1, max: 200, step: 1, unit: ' pts/s', defVal: DEFAULTS.physics.fishDps });
-  makeSlider(phys, 'Player DPS (out zone)', CONFIG.physics, 'playerDps', { min: 1, max: 200, step: 1, unit: ' pts/s', defVal: DEFAULTS.physics.playerDps });
+  const phys = $('global-body'); phys.innerHTML = '';
+  makeSlider(phys, 'Fish DPS (in zone)',    CONFIG.global, 'fishDps',   { min: 1, max: 200, step: 1, unit: ' pts/s', defVal: DEFAULTS.global.fishDps });
+  makeSlider(phys, 'Player DPS (out zone)', CONFIG.global, 'playerDps', { min: 1, max: 200, step: 1, unit: ' pts/s', defVal: DEFAULTS.global.playerDps });
   const help2 = document.createElement('div'); help2.className = 'help-text';
-  help2.textContent = 'Per-rod physics (reelOut, reelIn, responsiveness) are under the RODS section.';
+  help2.textContent = 'Per-rod global (reelOut, reelIn, responsiveness) are under the RODS section.';
   phys.appendChild(help2);
 
   // Rods table
@@ -2006,6 +2015,12 @@ $('btn-import-apply').onclick = () => {
 $('dbg-invincible').onchange = e => {
   state.debugInvincible = e.target.checked;
   $('invincible-badge').classList.toggle('visible', state.debugInvincible);
+};
+state.debugFreeCrank = localStorage.getItem('fishingPondFreeCrank') === 'true';
+$('dbg-free-crank').checked = state.debugFreeCrank;
+$('dbg-free-crank').onchange = e => {
+  state.debugFreeCrank = e.target.checked;
+  try { localStorage.setItem('fishingPondFreeCrank', e.target.checked); } catch(err) {}
 };
 
 // ============================================================================
